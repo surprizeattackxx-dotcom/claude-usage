@@ -52,7 +52,7 @@ claude-usage --sync-reset @12:00   # exact: resets at 12:00 local (no rounding d
 claude-usage --sync-reset 2h32m    # or paste the rounded "Resets in ..." from /usage
 ```
 
-Stores an absolute reset time; the countdown shows a `⟳` while it's active and falls back to the computed block end once it passes. Prefer the `@HH:MM` form — the "Resets in Xh Ym" text is minute-rounded, so a duration sync can be a couple minutes off. See the limitation below for why this is sometimes needed.
+Stores an absolute reset time. While synced, the countdown shows a `⟳` and **the window's usage is bounded by that same reset** — so the cost/%/tokens/msgs reset to a fresh window the instant the counter hits zero, instead of lingering. When a reset passes the anchor auto-advances by 5h to the next window (it never silently lapses back to the computed block), so you only re-sync when your real reset drifts. Prefer the `@HH:MM` form — the "Resets in Xh Ym" text is minute-rounded, so a duration sync can be a couple minutes off. See the limitation below for why this is sometimes needed.
 
 ## Limitation: Claude Code usage only
 

@@ -53,7 +53,6 @@ RESET = "\033[0m"; BOLD = "\033[1m"; DIM = "\033[2m"
 
 # ---- parsing with mtime cache ----
 _cache = {}  # path -> (mtime, size, [events])
-_seen_uuid = set()
 
 def parse_file(path):
     events = []
@@ -126,7 +125,29 @@ def fmt_dur(td):
     return f"{h}h {m:02d}m" if h else f"{m}m"
 
 # ---- 5h block model (ccusage-style) ----
-def active_block(events):
+def synced_window(now):
+    # real 5h window from a user-synced reset anchor (/usage), advanced in 5h
+    # steps so the anchor stays valid across windows instead of silently lapsing.
+    ra = load_config().get("reset_at")
+    if not ra: return None
+    try:
+        t = datetime.fromisoformat(ra)
+    except Exception:
+        return None
+    if t.tzinfo is None: t = t.replace(tzinfo=timezone.utc)
+    while t <= now: t += WINDOW
+    return t - WINDOW, t
+
+def active_block(events, now=None):
+    if now is None: now = datetime.now(timezone.utc)
+    sw = synced_window(now)
+    if sw:
+        # synced: window edges come from the real reset, so the usage shown and
+        # the countdown reset together the instant `now` crosses `end`.
+        start, end = sw
+        evs = [e for e in events if start <= e["t"] < end]
+        return {"start": start, "end": end, "events": evs,
+                "last": max((e["t"] for e in evs), default=start)}
     if not events: return None
     blocks = []
     cur = None
@@ -142,7 +163,6 @@ def active_block(events):
         else:
             cur["events"].append(e); cur["last"] = e["t"]
     if cur: blocks.append(cur)
-    now = datetime.now(timezone.utc)
     last = blocks[-1]
     if now < last["end"]:
         return last
@@ -194,8 +214,8 @@ def render():
     if blk:
         bt = sum(tok(e) for e in blk["events"])
         bc = sum(cost(e) for e in blk["events"])
-        synced, end = synced_reset(now, blk["end"])
-        resets = end - now
+        synced = synced_window(now) is not None
+        resets = blk["end"] - now
         frac, ref_label = window_fraction(bc, events)
         col = C["ok"] if frac < 0.6 else (C["ter"] if frac < 0.85 else C["err"])
         rmark = f"{fg(C['ter'])}⟳{RESET} " if synced else ""
@@ -213,6 +233,7 @@ def render():
     tt = sum(tok(e) for e in tev); tc = sum(cost(e) for e in tev)
     by_model = {}
     for e in tev:
+        if not tok(e): continue
         k = short_model(e["model"]); by_model.setdefault(k, 0); by_model[k] += tok(e)
     mstr = "  ".join(f"{fg(C['ter'])}{k}{RESET} {fg(C['sub'])}{fmt_tok(v)}{RESET}"
                      for k,v in sorted(by_model.items(), key=lambda x:-x[1]))
@@ -261,16 +282,6 @@ import re
 _ansi = re.compile(r"\033\[[0-9;]*m")
 def strip_len(s): return len(_ansi.sub("", s))
 
-def synced_reset(now, computed_end):
-    # if the user synced the real reset from /usage and it's still future, prefer it.
-    ra = load_config().get("reset_at")
-    if ra:
-        try:
-            t = datetime.fromisoformat(ra)
-            if t > now: return True, t
-        except Exception: pass
-    return False, computed_end
-
 def parse_dur(s):
     # "2h32m" / "2h" / "32m" / "2:32" -> timedelta
     s = s.strip().lower()
@@ -306,6 +317,7 @@ def linfit(samples):
 
 def window_fraction(bc, events):
     # returns (fraction 0..1+, label). Prefers a multi-sample linear fit.
+    if bc <= 0: return 0.0, "fresh"
     cfg = load_config()
     fit = cfg.get("fit")
     if fit and "a" in fit:
@@ -348,7 +360,7 @@ def main():
             print("percent must be > 0"); return
         events, _ = refresh_events()
         blk = active_block(events)
-        if not blk:
+        if not blk or not blk["events"]:
             print("no active 5-hour window to calibrate against — use Claude, then retry."); return
         bc = round(sum(cost(e) for e in blk["events"]), 2)
         cfg = load_config()
