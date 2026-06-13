@@ -16,11 +16,12 @@ def save_config(d):
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     with open(CONFIG, "w") as f: json.dump(d, f, indent=2)
 
-# $/million tokens: input, output, cache_write(1h-ish), cache_read
+# $/million tokens: input, output, cache_write(5m TTL, 1.25x), cache_read(0.1x)
 PRICING = {
-    "opus":   (15.0, 75.0, 18.75, 1.50),
+    "fable":  (10.0, 50.0, 12.5,  1.0),
+    "opus":   (5.0,  25.0, 6.25,  0.50),
     "sonnet": (3.0,  15.0, 3.75,  0.30),
-    "haiku":  (0.80, 4.0,  1.0,   0.08),
+    "haiku":  (1.0,  5.0,  1.25,  0.10),
 }
 def price_for(model):
     m = (model or "").lower()
