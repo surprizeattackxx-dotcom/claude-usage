@@ -6,7 +6,7 @@ A live, terminal usage tracker for [Claude Code](https://claude.com/claude-code)
 
 ## What it shows
 
-- **5-hour window** — token/cost burn in the current rolling 5-hour block, with a reset countdown. The bar is calibrated against your *median* historical block ("vs typical"); set `CLAUDE_USAGE_TOKEN_LIMIT` to gauge against a real plan limit instead.
+- **5-hour window** — cost-equivalent burn in the current rolling 5-hour block, with a reset countdown. The percentage is scaled against a **cost budget** (cost is used rather than raw tokens because it already weights output, cache-creation, and cache-reads the way the real plan limit does — cache reads alone are ~97% of raw tokens and barely count). Calibrate the budget to match your actual Claude usage %, see below.
 - **Today** — tokens and estimated cost, broken down by model.
 - **Live session** — the session you're working in right now, with tokens/min.
 - **All-time** — per-project breakdown across every session.
@@ -26,6 +26,17 @@ bin/claude-usage-float    # floating kitty window (class: claude-usage-tui)
 ```
 
 `q` quits. Refreshes every 2s.
+
+### Calibrating the 5-hour budget
+
+The real plan limit is opaque and model-weighted, so calibrate it once against the official percentage (Claude Code's `/usage`, or the web app). While it shows, say, 59%:
+
+```sh
+claude-usage --calibrate 59     # back-solves and saves the cost budget
+claude-usage --set-budget 212   # or set the dollar budget directly
+```
+
+This writes `~/.config/claude-usage/config.json`. `CLAUDE_USAGE_COST_BUDGET` overrides it. Uncalibrated, the bar falls back to your *median* historical block ("typical").
 
 ## Install
 

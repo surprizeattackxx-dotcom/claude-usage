@@ -4,8 +4,17 @@ from datetime import datetime, timezone, timedelta
 
 PROJECTS = os.path.expanduser("~/.claude/projects")
 PALETTE = os.path.expanduser("~/.local/state/quickshell/user/generated/colors.json")
+CONFIG = os.path.expanduser("~/.config/claude-usage/config.json")
 REFRESH = 2.0
 WINDOW = timedelta(hours=5)
+
+def load_config():
+    try:
+        with open(CONFIG) as f: return json.load(f)
+    except Exception: return {}
+def save_config(d):
+    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    with open(CONFIG, "w") as f: json.dump(d, f, indent=2)
 
 # $/million tokens: input, output, cache_write(1h-ish), cache_read
 PRICING = {
@@ -186,17 +195,12 @@ def render():
         bt = sum(tok(e) for e in blk["events"])
         bc = sum(cost(e) for e in blk["events"])
         resets = blk["end"] - now
-        # calibrate bar against env limit or historical peak token-block
-        env_lim = os.environ.get("CLAUDE_USAGE_TOKEN_LIMIT")
-        if env_lim and env_lim.isdigit():
-            limit = int(env_lim); ref_label = "limit"
-        else:
-            limit = max(bt, reference_block_tokens(events)); ref_label = "typical"
-        frac = bt / limit if limit else 0
+        budget, ref_label = cost_budget(events)
+        frac = bc / budget if budget else 0
         col = C["ok"] if frac < 0.6 else (C["ter"] if frac < 0.85 else C["err"])
         rule(f"{BOLD}{fg(C['sec'])}5-HOUR WINDOW{RESET}", f"{fg(C['sub'])}resets in {fg(col)}{fmt_dur(resets)}{RESET}")
         rule("  " + bar(frac, inner-12, col, C["track"]), f"{fg(col)}{frac*100:.0f}%{RESET}")
-        rule(f"  {fg(C['text'])}{fmt_tok(bt)} tok{RESET}  {fg(C['sub'])}·{RESET}  {fg(C['ok'])}${bc:.2f}{RESET}  {fg(C['sub'])}· {len(blk['events'])} msgs · {DIM}vs {fmt_tok(limit)} {ref_label}{RESET}")
+        rule(f"  {fg(C['ok'])}${bc:.2f}{RESET} {fg(C['sub'])}of ${budget:.0f} {ref_label}{RESET}  {fg(C['sub'])}· {fmt_tok(bt)} tok · {len(blk['events'])} msgs{RESET}")
     else:
         rule(f"{BOLD}{fg(C['sec'])}5-HOUR WINDOW{RESET}", f"{fg(C['sub'])}idle{RESET}")
         rule(f"  {fg(C['sub'])}no activity in the last 5h{RESET}")
@@ -256,27 +260,65 @@ import re
 _ansi = re.compile(r"\033\[[0-9;]*m")
 def strip_len(s): return len(_ansi.sub("", s))
 
-def reference_block_tokens(events):
-    # median tokens across historical 5h blocks (bar = this window vs a typical one)
-    if not events: return 1
+def cost_budget(events):
+    # $ cost budget the 5h window is scaled against. Calibrate with --calibrate.
+    env = os.environ.get("CLAUDE_USAGE_COST_BUDGET")
+    if env:
+        try: return float(env), "limit"
+        except ValueError: pass
+    cfg = load_config()
+    if cfg.get("cost_budget"):
+        return float(cfg["cost_budget"]), "limit"
+    return reference_block_cost(events), "typical"
+
+def block_costs(events):
+    # cost-equivalent of every historical 5h block
+    if not events: return []
     blocks = []; cur = None
     for e in events:
         if cur is None:
             start = e["t"].replace(minute=0, second=0, microsecond=0)
-            cur = {"end": start+WINDOW, "last": e["t"], "t": tok(e)}; continue
+            cur = {"end": start+WINDOW, "last": e["t"], "c": cost(e)}; continue
         if e["t"] >= cur["end"] or (e["t"]-cur["last"]) > WINDOW:
-            blocks.append(cur["t"]); start = e["t"].replace(minute=0,second=0,microsecond=0)
-            cur = {"end": start+WINDOW, "last": e["t"], "t": tok(e)}
+            blocks.append(cur["c"]); start = e["t"].replace(minute=0,second=0,microsecond=0)
+            cur = {"end": start+WINDOW, "last": e["t"], "c": cost(e)}
         else:
-            cur["t"] += tok(e); cur["last"] = e["t"]
-    if cur: blocks.append(cur["t"])
-    blocks = [b for b in blocks if b > 0]
-    if not blocks: return 1
+            cur["c"] += cost(e); cur["last"] = e["t"]
+    if cur: blocks.append(cur["c"])
+    return blocks
+
+def reference_block_cost(events):
+    # median cost across historical 5h blocks (fallback when uncalibrated)
+    blocks = [b for b in block_costs(events) if b > 0]
+    if not blocks: return 1.0
     blocks.sort()
     return blocks[len(blocks)//2]
 
 def main():
     load_palette()
+    if "--calibrate" in sys.argv:
+        i = sys.argv.index("--calibrate")
+        try: pct = float(sys.argv[i+1])
+        except (IndexError, ValueError):
+            print("usage: claude-usage --calibrate <percent>   (your real Claude usage % right now)"); return
+        events, _ = refresh_events()
+        blk = active_block(events)
+        if not blk:
+            print("no active 5-hour window to calibrate against — use Claude, then retry."); return
+        bc = sum(cost(e) for e in blk["events"])
+        if pct <= 0:
+            print("percent must be > 0"); return
+        budget = round(bc / (pct/100), 2)
+        cfg = load_config(); cfg["cost_budget"] = budget; save_config(cfg)
+        print(f"calibrated: window ${bc:.2f} = {pct:.0f}%  ->  budget ${budget:.2f}\nsaved to {CONFIG}")
+        return
+    if "--set-budget" in sys.argv:
+        i = sys.argv.index("--set-budget")
+        try: budget = round(float(sys.argv[i+1]), 2)
+        except (IndexError, ValueError):
+            print("usage: claude-usage --set-budget <dollars>"); return
+        cfg = load_config(); cfg["cost_budget"] = budget; save_config(cfg)
+        print(f"5-hour cost budget set to ${budget:.2f}  (saved to {CONFIG})"); return
     if "--once" in sys.argv:
         print(render()); return
     sys.stdout.write("\033[?1049h\033[?25l")  # alt screen, hide cursor
