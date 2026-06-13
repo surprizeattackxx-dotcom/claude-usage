@@ -1,2 +1,14 @@
 #!/usr/bin/env bash
-exec kitty --class claude-usage-tui -e "$(dirname "$(readlink -f "$0")")/claude-usage" "$@"
+# Toggle a floating claude-usage window (Hyprland, class: claude-usage-tui).
+here="$(dirname "$(readlink -f "$0")")"
+pid=""
+if command -v hyprctl >/dev/null; then
+	pid="$(hyprctl clients -j 2>/dev/null | python3 -c 'import json,sys
+m=[c for c in json.load(sys.stdin) if c.get("class")=="claude-usage-tui"]
+print(m[0]["pid"] if m else "")' 2>/dev/null)"
+fi
+if [ -n "$pid" ]; then
+	kill "$pid" 2>/dev/null
+else
+	exec kitty --class claude-usage-tui -e "$here/claude-usage" "$@"
+fi
