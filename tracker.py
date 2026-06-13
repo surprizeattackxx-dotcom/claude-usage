@@ -350,8 +350,61 @@ def reference_block_cost(events):
     blocks.sort()
     return blocks[len(blocks)//2]
 
+def json_out():
+    events, latest = refresh_events()
+    now = datetime.now(timezone.utc)
+    nowl = datetime.now()
+    d = {}
+
+    blk = active_block(events)
+    if blk:
+        bt = sum(tok(e) for e in blk["events"]); bc = sum(cost(e) for e in blk["events"])
+        frac, ref_label = window_fraction(bc, events)
+        d["window"] = {
+            "active": True, "cost": round(bc, 2), "frac": round(frac, 4),
+            "pct": round(frac*100), "tokens": bt, "msgs": len(blk["events"]),
+            "resets_seconds": int((blk["end"]-now).total_seconds()),
+            "synced": synced_window(now) is not None, "label": ref_label,
+        }
+    else:
+        d["window"] = {"active": False}
+
+    today = nowl.date()
+    tev = [e for e in events if e["t"].astimezone().date() == today]
+    by_model = {}
+    for e in tev:
+        if not tok(e): continue
+        k = short_model(e["model"]); by_model[k] = by_model.get(k, 0) + tok(e)
+    d["today"] = {"cost": round(sum(cost(e) for e in tev), 2),
+                  "tokens": sum(tok(e) for e in tev), "by_model": by_model}
+
+    sev = sorted(_cache.get(latest, (0,0,[]))[2], key=lambda e: e["t"]) if latest else []
+    if sev:
+        st_ = sum(tok(e) for e in sev); span = (sev[-1]["t"]-sev[0]["t"]).total_seconds()/60 or 1
+        d["live"] = {"active": (now-sev[-1]["t"]) < timedelta(minutes=3),
+                     "proj": sev[-1]["proj"], "model": short_model(sev[-1]["model"]),
+                     "tokens": st_, "cost": round(sum(cost(e) for e in sev), 2),
+                     "msgs": len(sev), "rate": round(st_/span)}
+    else:
+        d["live"] = {"active": False}
+
+    proj_tok = {}; proj_cost = {}
+    for e in events:
+        proj_tok[e["proj"]] = proj_tok.get(e["proj"], 0) + tok(e)
+        proj_cost[e["proj"]] = proj_cost.get(e["proj"], 0) + cost(e)
+    top = sorted(proj_tok.items(), key=lambda x:-x[1])[:6]
+    d["alltime"] = {
+        "cost": round(sum(proj_cost.values())), "tokens": sum(proj_tok.values()),
+        "since": (events[0]["t"].astimezone().isoformat() if events else nowl.isoformat()),
+        "top": [{"name": n, "tokens": t, "cost": round(proj_cost[n])} for n, t in top],
+    }
+    return json.dumps(d)
+
+
 def main():
     load_palette()
+    if "--json" in sys.argv:
+        print(json_out()); return
     if "--calibrate" in sys.argv:
         i = sys.argv.index("--calibrate")
         try: pct = float(sys.argv[i+1])
