@@ -196,13 +196,12 @@ def render():
         bc = sum(cost(e) for e in blk["events"])
         synced, end = synced_reset(now, blk["end"])
         resets = end - now
-        budget, ref_label = cost_budget(events)
-        frac = bc / budget if budget else 0
+        frac, ref_label = window_fraction(bc, events)
         col = C["ok"] if frac < 0.6 else (C["ter"] if frac < 0.85 else C["err"])
         rmark = f"{fg(C['ter'])}⟳{RESET} " if synced else ""
         rule(f"{BOLD}{fg(C['sec'])}5-HOUR WINDOW{RESET}", f"{fg(C['sub'])}{rmark}resets in {fg(col)}{fmt_dur(resets)}{RESET}")
         rule("  " + bar(frac, inner-12, col, C["track"]), f"{fg(col)}{frac*100:.0f}%{RESET}")
-        rule(f"  {fg(C['ok'])}${bc:.2f}{RESET} {fg(C['sub'])}of ${budget:.0f} {ref_label}{RESET}  {fg(C['sub'])}· {fmt_tok(bt)} tok · {len(blk['events'])} msgs{RESET}")
+        rule(f"  {fg(C['ok'])}${bc:.2f}{RESET} {fg(C['sub'])}· {ref_label} · {fmt_tok(bt)} tok · {len(blk['events'])} msgs{RESET}")
     else:
         rule(f"{BOLD}{fg(C['sec'])}5-HOUR WINDOW{RESET}", f"{fg(C['sub'])}idle{RESET}")
         rule(f"  {fg(C['sub'])}no activity in the last 5h{RESET}")
@@ -283,7 +282,7 @@ def parse_dur(s):
     return timedelta(hours=int(h.group(1)) if h else 0, minutes=int(m.group(1)) if m else 0)
 
 def cost_budget(events):
-    # $ cost budget the 5h window is scaled against. Calibrate with --calibrate.
+    # $ cost budget the 5h window is scaled against (single-point / fallback path).
     env = os.environ.get("CLAUDE_USAGE_COST_BUDGET")
     if env:
         try: return float(env), "limit"
@@ -292,6 +291,28 @@ def cost_budget(events):
     if cfg.get("cost_budget"):
         return float(cfg["cost_budget"]), "limit"
     return reference_block_cost(events), "typical"
+
+def linfit(samples):
+    # least-squares official% ≈ a*cost + b  (1 pt -> proportional through origin)
+    pts = [(float(c), float(p)) for c, p in samples if float(c) > 0]
+    if not pts: return None
+    if len(pts) == 1:
+        c, p = pts[0]; return p/c, 0.0
+    n = len(pts); mc = sum(c for c, _ in pts)/n; mp = sum(p for _, p in pts)/n
+    den = sum((c-mc)**2 for c, _ in pts)
+    if den == 0: return 0.0, mp
+    a = sum((c-mc)*(p-mp) for c, p in pts)/den
+    return a, mp - a*mc
+
+def window_fraction(bc, events):
+    # returns (fraction 0..1+, label). Prefers a multi-sample linear fit.
+    cfg = load_config()
+    fit = cfg.get("fit")
+    if fit and "a" in fit:
+        frac = (fit["a"]*bc + fit["b"]) / 100.0
+        return max(0.0, frac), f"fit·{fit.get('n', '?')}pt"
+    budget, lbl = cost_budget(events)
+    return (bc/budget if budget else 0.0), (f"${budget:.0f} {lbl}")
 
 def block_costs(events):
     # cost-equivalent of every historical 5h block
@@ -323,17 +344,31 @@ def main():
         try: pct = float(sys.argv[i+1])
         except (IndexError, ValueError):
             print("usage: claude-usage --calibrate <percent>   (your real Claude usage % right now)"); return
+        if pct <= 0:
+            print("percent must be > 0"); return
         events, _ = refresh_events()
         blk = active_block(events)
         if not blk:
             print("no active 5-hour window to calibrate against — use Claude, then retry."); return
-        bc = sum(cost(e) for e in blk["events"])
-        if pct <= 0:
-            print("percent must be > 0"); return
-        budget = round(bc / (pct/100), 2)
-        cfg = load_config(); cfg["cost_budget"] = budget; save_config(cfg)
-        print(f"calibrated: window ${bc:.2f} = {pct:.0f}%  ->  budget ${budget:.2f}\nsaved to {CONFIG}")
+        bc = round(sum(cost(e) for e in blk["events"]), 2)
+        cfg = load_config()
+        samples = cfg.get("samples", [])
+        samples.append([bc, pct])
+        a, b = linfit(samples)
+        cfg["samples"] = samples
+        cfg["fit"] = {"a": round(a, 5), "b": round(b, 4), "n": len(samples)}
+        cfg.pop("cost_budget", None)
+        save_config(cfg)
+        est = a*bc + b
+        resid = "  ".join(f"${c:.0f}→{p:.0f}%(est {a*c+b:.0f})" for c, p in samples)
+        print(f"sample added: window ${bc:.2f} = {pct:.0f}%  (now {len(samples)} pts)")
+        print(f"fit: usage% ≈ {a:.3f}·$ + {b:.1f}   this window est {est:.0f}%")
+        print(f"points: {resid}\nsaved to {CONFIG}")
         return
+    if "--reset-calibration" in sys.argv:
+        cfg = load_config()
+        for k in ("samples", "fit", "cost_budget"): cfg.pop(k, None)
+        save_config(cfg); print("calibration cleared (back to 'typical' fallback)"); return
     if "--set-budget" in sys.argv:
         i = sys.argv.index("--set-budget")
         try: budget = round(float(sys.argv[i+1]), 2)

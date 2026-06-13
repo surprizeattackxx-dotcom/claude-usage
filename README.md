@@ -27,16 +27,23 @@ bin/claude-usage-float    # floating kitty window (class: claude-usage-tui)
 
 `q` quits. Refreshes every 2s.
 
-### Calibrating the 5-hour budget
+### Calibrating the 5-hour percentage
 
-The real plan limit is opaque and model-weighted, so calibrate it once against the official percentage (Claude Code's `/usage`, or the web app). While it shows, say, 59%:
+The real plan limit is opaque and isn't perfectly proportional to cost, so calibration uses a **multi-sample linear fit** (`usage% ≈ a·$ + b`). Each time you check the official number (Claude Code's `/usage` or the web app), feed it in:
 
 ```sh
-claude-usage --calibrate 59     # back-solves and saves the cost budget
-claude-usage --set-budget 212   # or set the dollar budget directly
+claude-usage --calibrate 59     # adds a (current-cost, 59%) sample and refits
+claude-usage --calibrate 86     # later: another sample — fit tightens
 ```
 
-This writes `~/.config/claude-usage/config.json`. `CLAUDE_USAGE_COST_BUDGET` overrides it. Uncalibrated, the bar falls back to your *median* historical block ("typical").
+Two or three samples spread across a window get within a few percent. The residual floor (~3%) is unavoidable — see the limitation below. Other knobs:
+
+```sh
+claude-usage --set-budget 212        # simple single proportional budget instead
+claude-usage --reset-calibration     # wipe samples/fit, back to "typical" fallback
+```
+
+Stored in `~/.config/claude-usage/config.json`. `CLAUDE_USAGE_COST_BUDGET` forces a fixed budget. Uncalibrated, the bar falls back to your *median* historical block ("typical").
 
 ### Syncing the reset countdown
 
