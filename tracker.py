@@ -378,12 +378,21 @@ def main():
         print(f"5-hour cost budget set to ${budget:.2f}  (saved to {CONFIG})"); return
     if "--sync-reset" in sys.argv:
         i = sys.argv.index("--sync-reset")
-        try: td = parse_dur(sys.argv[i+1])
-        except (IndexError, ValueError):
-            print("usage: claude-usage --sync-reset <2h32m|2:32|32m>   (from Claude's /usage)"); return
-        when = datetime.now(timezone.utc) + td
+        try: val = sys.argv[i+1]
+        except IndexError: val = ""
+        try:
+            if val.startswith("@"):  # absolute local clock time, e.g. @12:00
+                hh, mm = val[1:].split(":")
+                ln = datetime.now().astimezone()
+                target = ln.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+                if target <= ln: target += timedelta(days=1)
+                when = target.astimezone(timezone.utc)
+            else:
+                when = (datetime.now(timezone.utc) + parse_dur(val)).replace(second=0, microsecond=0)
+        except (ValueError, IndexError):
+            print("usage: claude-usage --sync-reset <2h32m|2:32|32m | @12:00>   (from Claude's /usage)"); return
         cfg = load_config(); cfg["reset_at"] = when.isoformat(); save_config(cfg)
-        print(f"reset synced: window resets in {fmt_dur(td)} ({when.astimezone():%H:%M %Z})\nsaved to {CONFIG}"); return
+        print(f"reset synced: resets {when.astimezone():%H:%M} (in {fmt_dur(when-datetime.now(timezone.utc))})\nsaved to {CONFIG}"); return
     if "--once" in sys.argv:
         print(render()); return
     sys.stdout.write("\033[?1049h\033[?25l")  # alt screen, hide cursor

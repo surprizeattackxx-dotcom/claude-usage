@@ -48,10 +48,11 @@ Stored in `~/.config/claude-usage/config.json`. `CLAUDE_USAGE_COST_BUDGET` force
 ### Syncing the reset countdown
 
 ```sh
-claude-usage --sync-reset 2h32m   # paste the "Resets in ..." from /usage
+claude-usage --sync-reset @12:00   # exact: resets at 12:00 local (no rounding drift)
+claude-usage --sync-reset 2h32m    # or paste the rounded "Resets in ..." from /usage
 ```
 
-Stores an absolute reset time; the countdown shows a `⟳` while it's active and falls back to the computed block end once it passes. See the limitation below for why this is sometimes needed.
+Stores an absolute reset time; the countdown shows a `⟳` while it's active and falls back to the computed block end once it passes. Prefer the `@HH:MM` form — the "Resets in Xh Ym" text is minute-rounded, so a duration sync can be a couple minutes off. See the limitation below for why this is sometimes needed.
 
 ## Limitation: Claude Code usage only
 
