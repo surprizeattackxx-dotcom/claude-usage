@@ -38,6 +38,23 @@ claude-usage --set-budget 212   # or set the dollar budget directly
 
 This writes `~/.config/claude-usage/config.json`. `CLAUDE_USAGE_COST_BUDGET` overrides it. Uncalibrated, the bar falls back to your *median* historical block ("typical").
 
+### Syncing the reset countdown
+
+```sh
+claude-usage --sync-reset 2h32m   # paste the "Resets in ..." from /usage
+```
+
+Stores an absolute reset time; the countdown shows a `⟳` while it's active and falls back to the computed block end once it passes. See the limitation below for why this is sometimes needed.
+
+## Limitation: Claude Code usage only
+
+This reads `~/.claude/projects` — **Claude Code's** local logs. Your plan limit is **shared** across Claude Code, claude.ai (web), and the desktop app, but web/app usage isn't logged locally, so:
+
+- The window **%** will read slightly *under* the official number whenever you've also used Claude on the web or app.
+- The official 5-hour window is anchored to your first activity on *any* client; if that was a web/app session, your reset will be earlier than what's computed here — use `--sync-reset` to align it.
+
+Everything is exact for Claude Code usage itself.
+
 ## Install
 
 ```sh

@@ -194,11 +194,13 @@ def render():
     if blk:
         bt = sum(tok(e) for e in blk["events"])
         bc = sum(cost(e) for e in blk["events"])
-        resets = blk["end"] - now
+        synced, end = synced_reset(now, blk["end"])
+        resets = end - now
         budget, ref_label = cost_budget(events)
         frac = bc / budget if budget else 0
         col = C["ok"] if frac < 0.6 else (C["ter"] if frac < 0.85 else C["err"])
-        rule(f"{BOLD}{fg(C['sec'])}5-HOUR WINDOW{RESET}", f"{fg(C['sub'])}resets in {fg(col)}{fmt_dur(resets)}{RESET}")
+        rmark = f"{fg(C['ter'])}⟳{RESET} " if synced else ""
+        rule(f"{BOLD}{fg(C['sec'])}5-HOUR WINDOW{RESET}", f"{fg(C['sub'])}{rmark}resets in {fg(col)}{fmt_dur(resets)}{RESET}")
         rule("  " + bar(frac, inner-12, col, C["track"]), f"{fg(col)}{frac*100:.0f}%{RESET}")
         rule(f"  {fg(C['ok'])}${bc:.2f}{RESET} {fg(C['sub'])}of ${budget:.0f} {ref_label}{RESET}  {fg(C['sub'])}· {fmt_tok(bt)} tok · {len(blk['events'])} msgs{RESET}")
     else:
@@ -260,6 +262,26 @@ import re
 _ansi = re.compile(r"\033\[[0-9;]*m")
 def strip_len(s): return len(_ansi.sub("", s))
 
+def synced_reset(now, computed_end):
+    # if the user synced the real reset from /usage and it's still future, prefer it.
+    ra = load_config().get("reset_at")
+    if ra:
+        try:
+            t = datetime.fromisoformat(ra)
+            if t > now: return True, t
+        except Exception: pass
+    return False, computed_end
+
+def parse_dur(s):
+    # "2h32m" / "2h" / "32m" / "2:32" -> timedelta
+    s = s.strip().lower()
+    if ":" in s:
+        h, m = s.split(":", 1); return timedelta(hours=int(h), minutes=int(m))
+    import re as _re
+    h = _re.search(r"(\d+)\s*h", s); m = _re.search(r"(\d+)\s*m", s)
+    if not h and not m and s.isdigit(): return timedelta(minutes=int(s))
+    return timedelta(hours=int(h.group(1)) if h else 0, minutes=int(m.group(1)) if m else 0)
+
 def cost_budget(events):
     # $ cost budget the 5h window is scaled against. Calibrate with --calibrate.
     env = os.environ.get("CLAUDE_USAGE_COST_BUDGET")
@@ -319,6 +341,14 @@ def main():
             print("usage: claude-usage --set-budget <dollars>"); return
         cfg = load_config(); cfg["cost_budget"] = budget; save_config(cfg)
         print(f"5-hour cost budget set to ${budget:.2f}  (saved to {CONFIG})"); return
+    if "--sync-reset" in sys.argv:
+        i = sys.argv.index("--sync-reset")
+        try: td = parse_dur(sys.argv[i+1])
+        except (IndexError, ValueError):
+            print("usage: claude-usage --sync-reset <2h32m|2:32|32m>   (from Claude's /usage)"); return
+        when = datetime.now(timezone.utc) + td
+        cfg = load_config(); cfg["reset_at"] = when.isoformat(); save_config(cfg)
+        print(f"reset synced: window resets in {fmt_dur(td)} ({when.astimezone():%H:%M %Z})\nsaved to {CONFIG}"); return
     if "--once" in sys.argv:
         print(render()); return
     sys.stdout.write("\033[?1049h\033[?25l")  # alt screen, hide cursor
